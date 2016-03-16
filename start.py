@@ -27,17 +27,16 @@ api = Api(app)
 BASE_URL = 'http://weixin.sogou.com'
 UA = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36"
 base_url = 'http://mp.weixin.qq.com/s?'
-
+logging.config.fileConfig("logging.conf")
+logger = logging.getLogger("spider")
+reload(sys)
+sys.setdefaultencoding('utf8')
 class Spider(Resource):
     def get(self):
-        # url = str(key).split('=')[0];
-        # print key
         url = request.args.get('key')
-        logging.config.fileConfig("logging.conf")
-        logger = logging.getLogger("spider")
-
+        logger.info('url is '+url)
         if url is None or url == '':
-            return json.dumps({'msg': 'url can\'t be empty'})
+            return json.dumps({'success': False,'msg': 'url can\'t be empty'})
         try:
             if not url.startswith('http://mp.weixin.qq.com/') and not url.startswith('https://mp.weixin.qq.com/'):
                 return {'success': False, 'msg': 'url pattern is not correct'}
@@ -81,11 +80,17 @@ class Spider(Resource):
 
 
                 tempUrl = url.replace('#', '%23').replace('&', '%26')
-                # generate tinyurl
-                f = urllib.urlopen(apiUrl + tempUrl)
-                s = f.read()
-                logger.info('tinyurl is [' + s + ']')
-                item['tinyurl'] = s
+                try:
+                    # generate tinyurl
+                    f = urllib2.urlopen(apiUrl + tempUrl,timeout=5)
+                    s = f.read()
+                    logger.info('tinyurl is [' + s + ']')
+                    item['tinyurl'] = s
+                except Exception,ex:
+                    logger.error('generate tinyurl error')
+                    logger.error(ex)
+                    item['tinyurl'] = tempUrl
+
 
                 s = requests.Session()
                 headers = {"User-Agent": UA}
@@ -110,6 +115,7 @@ class Spider(Resource):
                     content = str(soup.select("#js_content")[0]).replace('data-src', 'src')
                     d = pq(content)
                     item[u'title'] = soup.select('title')[0].text
+                    print item['title']
                     item[u'author'] = soup.select('#post-user')[0].text
                     item['datetime'] = soup.select('#post-date')[0].text
                     item['contenturl'] = url
@@ -118,59 +124,56 @@ class Spider(Resource):
                     if imgsrc != '' and imgsrc != None:#uploading img and store it in to data
                         logger.info('has picture in article')
                         logger.info(imgsrc)
+                        try:
 
-                        pic_data = base64.b64encode(urllib2.urlopen(imgsrc).read())
+                            pic_data = base64.b64encode(urllib2.urlopen(imgsrc,timeout=5).read())
 
-                        pic_data_md5 = hashlib.new("md5", pic_data).hexdigest()
+                            pic_data_md5 = hashlib.new("md5", pic_data).hexdigest()
 
-                        data = {}  # upload img data
+                            data = {}  # upload img data
 
-                        data['uid'] = 2634258
-                        data['verifystr'] = pic_data_md5
-                        #data['topic_id'] = 100
-                        data['source'] = 16
-                        data['data'] = pic_data
-                        data['apptoken'] = 'dmaitoken01'
+                            data['uid'] = 2634258
+                            data['verifystr'] = pic_data_md5
+                            #data['topic_id'] = 100
+                            data['source'] = 16
+                            data['data'] = pic_data
+                            data['apptoken'] = 'dmaitoken01'
 
-                        # client_info = {}
-                        # client_info['channel'] = '9'
-                        # client_info['type'] = 'android'
-                        # client_info['app'] = 11
-                        # client_info['version'] = 4.8
-                        # client_info['device_id'] = '7A0C057F-0944-4EA9-B193-D1ACB439F607'
-                        # client_info['network'] = '2g'
-                        # client_info['isp'] = '\u4e2d\u56fd\u79fb\u52a8'
-                        # client_info['ip'] = '127.0.0.1'
-                        # client_info['ssid'] = ''
-                        #
-                        # data['client_info'] = client_info
-
-
-                        UPLOADING = app.config.get('UPLOADING')
-                        upload_url = UPLOADING['url'];  # upload img url
-                        logger.info('uploading url is ['+upload_url+']')
-                        uploading_req = urllib2.urlopen(upload_url, json.dumps(data))
-                        upload_result_content = uploading_req.read()
-                        upload_result = json.loads(upload_result_content)
-                        logger.info('uploading_result is ')
-                        logger.info(upload_result)
-                        if (upload_result['success'] == 1):
-                            logger.info('uploading img ' + imgsrc + ' successfully')
-                            item['img'] = upload_result['file_url']
-                        else:
-                            logger.info('uploading img ' + imgsrc + ' failed')
-                            item['img'] = ''
+                            UPLOADING = app.config.get('UPLOADING')
+                            upload_url = UPLOADING['url'];  # upload img url
+                            logger.info('uploading url is ['+upload_url+']')
+                            uploading_req = urllib2.urlopen(upload_url, json.dumps(data))
+                            upload_result_content = uploading_req.read()
+                            upload_result = json.loads(upload_result_content)
+                            logger.info('uploading_result is ')
+                            logger.info(upload_result)
+                            if (upload_result['success'] == 1):
+                                logger.info('uploading img ' + imgsrc + ' successfully')
+                                item['img'] = upload_result['file_url']
+                            else:
+                                logger.info('uploading img ' + imgsrc + ' failed')
+                                item['img'] = ''
+                        except Exception,ex:
+                            logger.error('uploading img error and set img to original img path')
+                            logger.error(ex)
+                            item['img']=imgsrc
 
                     span_length = d('p').find('span').length
                     for i in range(0,span_length):
                         if d('p').find('span').eq(i).text() != '':
-                            item['digest'] = d('p').find('span').eq(i).text()
+                            digest = d('p').find('span').eq(i).text()
+                            try:
+                                digest = digest.encode("latin1").decode("utf8")#乱码判断
+                            except Exception,e:
+                                logger.error('normal utf-8 string')
+                            item['digest'] = digest
                             break
 
                     if item.has_key('digest') == False:
                         item['digest']=''
                     md.save(item)
                     item['success'] = True
+                    print item
                     logger.info('save item to mongodb ')
 
                 except Exception, ex:
@@ -183,37 +186,13 @@ class Spider(Resource):
             logger.error(ex)
             return {'success': False}
 
-
-
-
 api.add_resource(Spider, '/')
 
-port = 5000  # default port
-if len(sys.argv) >= 2:
-    # use port from command line
-    port = sys.argv[1]
-
-if len(sys.argv) >= 3:
-    # use port from command line
-    file_name = sys.argv[2]
-    if 'prod' == file_name:
-        print 'use prod.py'
-        app.config.from_pyfile('prod.py')
-    else:
-        print 'use test.py'
-        app.config.from_pyfile('test.py')
-else:
-    print 'user test.py in else'
-    app.config.from_pyfile('test.py')
 try:
-    # received port is valid or not
-    int(port)
-
-
-except Exception, ex:
-    print ex
-    print 'port number is invalid,use default port '
-    port = 5000
+    app.config.from_envvar('spider_env')
+except Exception,ex:
+    logger.error('config file error,prepare to user test.py')
+    app.config.from_pyfile('test.py')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True, port=int(port))
+    app.run(host='0.0.0.0',threaded=True)
